@@ -1,11 +1,13 @@
 <?php
 
 class NavInvoice{
+    private $tokenUrl = 'https://api-test.onlineszamla.nav.gov.hu/invoiceService/tokenExchange';
+
     private $user;
     private $password;
     private $company;
     private $taxNumber;
-    private $requestId;
+    private $requestIdPrefix = 'TEST';
     private $xmlKey;
     private $xmlChangeKey;
     /*
@@ -19,6 +21,114 @@ class NavInvoice{
     private $softwareDevContact = 'test@test.hu';
     private $softwareDevCountryCode = 'HU';
     private $softwareDevTaxNumber = '99999999-2-41';
+
+    private $timeStamp;
+    private $timeStampFormatted;
+    private $signature;
+    private $requestId;
+    private $lastResult;
+    private $token;
+
+    private $log = true;
+    private $logFile;
+
+
+    public function __construct()
+    {
+        $date_utc = new \DateTime("now");
+        $this->timeStampFormatted = $date_utc->format("Y-m-d\TH:i:s.000\Z");
+        $this->timeStamp = $date_utc;
+        $this->logFile = fopen("log".date('Y-m-d').".txt", "a+");
+    }
+
+    public function generateRequestId($customId = null){
+        $this->requestId = (empty($customId)?$this->requestIdPrefix.time():$customId);
+    }
+
+    public function setSignature($invoice = null){
+        $this->signature = strtoupper(hash('sha512',$this->requestId. $this->timeStamp->format('YmdHis'). $this->xmlKey. (!empty($invoice)?$invoice:null)));
+    }
+
+    public function generateXmlHeader(){
+        return [
+            'header' => [
+                'requestId' => $this->requestId,
+                'timestamp' => $this->timeStampFormatted,
+                'requestVersion' => '1.0',
+                'headerVersion' => '1.0'
+            ],
+            'user' => [
+                'login' => $this->user,
+                'passwordHash' => $this->password,
+                'taxNumber' => $this->taxNumber,
+                'requestSignature' => $this->signature
+            ],
+            'software' => [
+                'softwareId' => $this->softwareId,
+                'softwareName' => $this->softwareName,
+                'softwareOperation' => $this->softwareOperation,
+                'softwareMainVersion' => $this->softwareMainVersion,
+                'softwareDevName' => $this->softwareDevName,
+                'softwareDevContact' => $this->softwareDevContact,
+                'softwareDevCountryCode' => $this->softwareDevCountryCode,
+                'softwareDevTaxNumber' => $this->softwareDevTaxNumber
+            ]
+        ];
+    }
+
+    public function getNewToken(){
+        $xml = new SimpleXMLElement('<TokenExchangeRequest/>');
+        $xml->addAttribute('xmlns', 'http://schemas.nav.gov.hu/OSA/1.0/api');
+        $this->arrayToXml($this->generateXmlHeader(),$xml);
+        $xmlString = $xml->asXML();
+        var_dump($xmlString);
+        $return = $this->callUrl($this->tokenUrl,$xmlString);
+        $returnXml = simplexml_load_string($return);
+        if(empty($returnXml->encodedExchangeToken)){
+            $this->writeLog('Token request failed');
+            throw new Exception('Error! Token Missing;');
+        }
+        $this->token = $returnXml->encodedExchangeToken;
+
+    }
+
+    public function callUrl($url, $xml){
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_VERBOSE, 1);
+        curl_setopt($ch, CURLOPT_HEADER, false);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, 0);
+        curl_setopt($ch, CURLOPT_URL, $url );
+        curl_setopt($ch, CURLOPT_POST, true );
+        curl_setopt($ch, CURLOPT_HTTPHEADER,
+            array('Content-Type: application/xml',
+                'Accept: application/xml'));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true );
+        curl_setopt($ch, CURLOPT_POSTFIELDS,$xml);
+        $result = $this->lastResult = curl_exec($ch);
+        curl_close($ch);
+        return $result;
+
+    }
+
+
+    private function arrayToXml( $data, &$xml_data ) {
+        foreach( $data as $key => $value ) {
+            if( is_numeric($key) ){
+                $key = 'item'.$key; //dealing with <0/>..<n/> issues
+            }
+            if( is_array($value) ) {
+                $subnode = $xml_data->addChild($key);
+                $this->arrayToXml($value, $subnode);
+            } else {
+                $xml_data->addChild("$key",htmlspecialchars("$value"));
+            }
+        }
+    }
+
+    public function writeLog($logText){
+        fwrite($this->logFile, date('Y-m-d H:i:s').':'. $logText);
+    }
 
     /**
      * @param mixed $user
@@ -36,7 +146,7 @@ class NavInvoice{
      */
     public function setPassword($password)
     {
-        $this->password = $password;
+        $this->password = strtoupper(hash('sha512',$password));
         return $this;
     }
 
@@ -57,16 +167,6 @@ class NavInvoice{
     public function setTaxNumber($taxNumber)
     {
         $this->taxNumber = $taxNumber;
-        return $this;
-    }
-
-    /**
-     * @param mixed $requestId
-     * @return NavInvoice
-     */
-    public function setRequestId($requestId)
-    {
-        $this->requestId = $requestId;
         return $this;
     }
 
@@ -168,6 +268,28 @@ class NavInvoice{
     {
         $this->softwareDevTaxNumber = $softwareDevTaxNumber;
         return $this;
+    }
+
+    /**
+     * @param mixed $requestIdPrefix
+     * @return NavInvoice
+     */
+    public function setRequestIdPrefix($requestIdPrefix)
+    {
+        $this->requestIdPrefix = $requestIdPrefix;
+        return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getLastResult($asRaw = true)
+    {
+        if($asRaw){
+            return $this->lastResult;
+        }else{
+            return simplexml_load_string($this->lastResult);
+        }
     }
 
 }
