@@ -5,6 +5,7 @@ class NavInvoice
 {
     private $tokenUrl = 'https://api-test.onlineszamla.nav.gov.hu/invoiceService/tokenExchange';
     private $invoiceUrl = 'https://api-test.onlineszamla.nav.gov.hu/invoiceService/manageInvoice';
+    private $invoiceQueryUrl = 'https://api-test.onlineszamla.nav.gov.hu/invoiceService/queryInvoiceStatus';
 
     private $user;
     private $password;
@@ -33,6 +34,7 @@ class NavInvoice
     private $token;
 
     private $log = true;
+    private $logDir = '';
     private $logFile;
 
     private $invoiceSupplier = [];
@@ -41,6 +43,9 @@ class NavInvoice
     private $invoiceLines = [];
     private $invoiceSummary = [];
 
+    private $requestCounter = 0;
+
+    private $errors = [];
 
 
     public function __construct()
@@ -48,7 +53,8 @@ class NavInvoice
         $date_utc = new \DateTime("now");
         $this->timeStampFormatted = $date_utc->format("Y-m-d\TH:i:s.000\Z");
         $this->timeStamp = $date_utc;
-        if ($this->log) $this->logFile = fopen("log" . date('Y-m-d') . ".txt", "a+");
+        if ($this->log) $this->logFile = fopen($this->logDir."log" . date('Y-m-d') . ".txt", "a+");
+        $this->writeLog('NAV script started');
         $this->invoiceSummary = [
             'invoiceNetAmount' => 0,
             'invoiceVatAmount' => 0,
@@ -59,7 +65,8 @@ class NavInvoice
 
     public function generateRequestId($customId = null)
     {
-        $this->requestId = (empty($customId) ? $this->requestIdPrefix . time() : $customId);
+        $this->requestId = (empty($customId) ? $this->requestIdPrefix . time(). $this->requestCounter : $customId);
+        $this->requestCounter++;
     }
 
     public function setSignature($invoice = null)
@@ -108,7 +115,7 @@ class NavInvoice
             throw new Exception('Error! Token Missing;');
         }
 
-        $aes = new AES((string)$returnXml->encodedExchangeToken, xmlchangekey, 128);
+        $aes = new AES((string)$returnXml->encodedExchangeToken, $this->xmlChangeKey, 128);
         $this->token = str_replace(chr('0x10'),'',$aes->decrypt());
 
     }
@@ -129,14 +136,14 @@ class NavInvoice
     public function addSupplierData(
         $taxNumber = '',
         $companyName = '',
-        $account = '',
+        $account = false,
         $postalCode = '',
         $city = '',
         $streetName = '',
         $publicPlaceCategory = '',
-        $number = '',
-        $floor = '',
-        $door = '',
+        $number = false,
+        $floor = false,
+        $door = false,
         $countyCode = 'HU'
     )
     {
@@ -161,6 +168,7 @@ class NavInvoice
             ],
             'supplierBankAccountNumber' => $account
         ];
+
     }
 
     /**
@@ -179,14 +187,14 @@ class NavInvoice
     public function addCustomerData(
         $taxNumber = '',
         $companyName = '',
-        $account = '',
+        $account = false,
         $postalCode = '',
         $city = '',
         $streetName = '',
         $publicPlaceCategory = '',
-        $number = '',
-        $floor = '',
-        $door = '',
+        $number = false,
+        $floor = false,
+        $door = false,
         $countyCode = 'HU'
     )
     {
@@ -218,6 +226,7 @@ class NavInvoice
      * @param string $invoiceIssueDate Számla kelte
      * @param string $invoiceDeliveryDate Teljesítés Dátuma
      * @param string $paymentDate Fizetés dátuma
+     * @param string $currency
      * @param string $paymentMethod
      * @param string $invoiceCategory
      * @param string $invoiceAppearance
@@ -227,6 +236,7 @@ class NavInvoice
         $invoiceIssueDate = '',
         $invoiceDeliveryDate = '',
         $paymentDate = '',
+        $currency = 'HUF',
         $paymentMethod = 'TRANSFER',
         $invoiceCategory = 'NORMAL',
         $invoiceAppearance = 'PAPER'
@@ -235,14 +245,16 @@ class NavInvoice
     {
         $this->invoiceData = [
             'invoiceNumber' => $invoiceNumber,
+            'invoiceCategory' => $invoiceCategory,
             'invoiceIssueDate' => $invoiceIssueDate,
             'invoiceDeliveryDate' => $invoiceDeliveryDate,
-            'paymentDate' => $paymentDate,
+            'currencyCode' => $currency,
             'paymentMethod' => $paymentMethod,
-            'invoiceCategory' => $invoiceCategory,
+            'paymentDate' => $paymentDate,
             'invoiceAppearance' => $invoiceAppearance,
         ];
     }
+
 
     /**
      * @param int $lineNumber
@@ -373,39 +385,80 @@ class NavInvoice
 
     }
 
+    /**
+     * @param string $action
+     * @param string $technicalAnnulment
+     * @return SimpleXMLElement
+     * @throws Exception
+     */
     public function sendInvoice($action =  'CREATE', $technicalAnnulment = 'false')
     {
         $this->setSignature(crc32(base64_encode($this->generateInvoiceXml())));
-        $invoiceData = [
-            $this->generateXmlHeader(),
-            'exchangeToken' => $this->token,
-            'invoiceOperations' => [
-                'technicalAnnulment' => $technicalAnnulment,
-                'compressedContent' => 'false',
-                'invoiceOperation' => [
-                    'index' => 1,
-                    'operation' => $action,
-                    'invoice' => base64_encode($this->generateInvoiceXml())
-                ]
+        $invoiceData = $this->generateXmlHeader()+[
+                'exchangeToken' => $this->token,
+                'invoiceOperations' => [
+                    'technicalAnnulment' => $technicalAnnulment,
+                    'compressedContent' => 'false',
+                    'invoiceOperation' => [
+                        'index' => 1,
+                        'operation' => $action,
+                        'invoice' => base64_encode($this->generateInvoiceXml())
+                    ]
 
-            ]
-        ];
+                ]
+            ];
 
         $xml = new SimpleXMLElement('<ManageInvoiceRequest/>');
         $xml->addAttribute('xmlns', 'http://schemas.nav.gov.hu/OSA/1.0/api');
         $this->arrayToXml($invoiceData, $xml);
         $xmlString = $xml->asXML();
-
-
         $return = $this->callUrl($this->invoiceUrl, $xmlString);
         $returnXml = simplexml_load_string($return);
-        var_dump($returnXml);
-        if (empty($returnXml->encodedExchangeToken)) {
-            $this->writeLog('Token request failed');
-            throw new Exception('Error! Token Missing;');
+        if ($returnXml->result->funcCode == 'ERROR') {
+            $this->writeLog('Invoice send failed!');
+            $this->writeLog(json_encode((array)$returnXml));
+            throw new Exception('Invoice send failed!');
         }
-        $this->token = $returnXml->encodedExchangeToken;
+        $this->writeLog('Invoice sent success! Transaction Id:'.$returnXml->transactionId);
+        return $returnXml->transactionId;
 
+    }
+
+    /**
+     * @param $ident
+     * @return bool|string
+     * @throws Exception
+     */
+    public function checkInvoiceStatus($ident)
+    {
+        $this->setSignature();
+        $requesData = $this->generateXmlHeader()+[
+
+                'transactionId' => $ident,
+                'returnOriginalRequest' => 'false'
+            ];
+
+        $xml = new SimpleXMLElement('<QueryInvoiceStatusRequest/>');
+        $xml->addAttribute('xmlns', 'http://schemas.nav.gov.hu/OSA/1.0/api');
+        $this->arrayToXml($requesData, $xml);
+        $xmlString = $xml->asXML();
+
+        $return = $this->callUrl($this->invoiceQueryUrl, $xmlString);
+        $returnXml = simplexml_load_string($return);
+        if ($returnXml->result->funcCode == 'ERROR') {
+            $this->writeLog('Invoice query failed!');
+            $this->writeLog(json_encode((array)$returnXml));
+            throw new Exception('Invoice query failed!');
+        }
+
+        if((string)$returnXml->processingResults->processingResult->invoiceStatus=='ABORTED'){
+            $this->writeLog('Invoice processing aborted!');
+            $this->writeLog(json_encode((array)$returnXml->processingResults));
+            $this->errors[] = json_encode((array)$returnXml->processingResults);
+            return false;
+        }
+
+        return (string)$returnXml->processingResults->processingResult->invoiceStatus;
     }
 
     public function callUrl($url, $xml)
@@ -442,14 +495,17 @@ class NavInvoice
                     $subnode = $xml_data->addChild($key);
                     $this->arrayToXml($value, $subnode);
                 } else {
-                    $xml_data->addChild($key, $value);
+                    if($value !== false){
+                        $xml_data->addChild($key, $value);
+                    }
                 }
         }
     }
 
     public function writeLog($logText)
     {
-        if ($this->log) fwrite($this->logFile, date('Y-m-d H:i:s') . ':' . $logText);
+        if ($this->log) fwrite($this->logFile, date('Y-m-d H:i:s') . ':' . $logText.'
+');
     }
 
     /**
@@ -613,6 +669,21 @@ class NavInvoice
         } else {
             return simplexml_load_string($this->lastResult);
         }
+    }
+
+    /**
+     * @param bool $asRaw
+     * @return mixed
+     */
+    public function getErrors()
+    {
+        return $this->errors;
+    }
+
+    public function setLogDir($logDir)
+    {
+        $this->logDir = $logDir;
+        return $this;
     }
 
 }
