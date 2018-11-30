@@ -28,7 +28,7 @@ try{
 }catch(Exception $e){
     //send email for example
 }
-
+$api->generateRequestId();
 $api->addSupplierData('14410615-2-41', 'Total Studio Kft', false, '1043', 'Budapest', 'Kassai', 'utca', '11', '4', '24');
 $api->addCustomerData('28651729-3-41', 'AGIMAR Cooperation Bt',false, '1037', 'Budapest', 'Erdőalja', 'út', '36');
 $api->addInvoiceData('TS00007/2018','2018-06-23','2018-06-23','2018-06-30');
