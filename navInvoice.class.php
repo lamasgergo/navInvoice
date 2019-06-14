@@ -3,9 +3,13 @@
 
 class NavInvoice
 {
-    private $tokenUrl = 'https://api-test.onlineszamla.nav.gov.hu/invoiceService/tokenExchange';
-    private $invoiceUrl = 'https://api-test.onlineszamla.nav.gov.hu/invoiceService/manageInvoice';
-    private $invoiceQueryUrl = 'https://api-test.onlineszamla.nav.gov.hu/invoiceService/queryInvoiceStatus';
+    private $tokenUrl = 'https://api.onlineszamla.nav.gov.hu/invoiceService/tokenExchange';
+    private $invoiceUrl = 'https://api.onlineszamla.nav.gov.hu/invoiceService/manageInvoice';
+    private $invoiceQueryUrl = 'https://api.onlineszamla.nav.gov.hu/invoiceService/queryInvoiceStatus';
+    
+    private $tokenUrlTest = 'https://api.onlineszamla-test.nav.gov.hu/invoiceService/tokenExchange';
+    private $invoiceUrlTest = 'https://api.onlineszamla-test.nav.gov.hu/invoiceService/manageInvoice';
+    private $invoiceQueryUrlTest = 'https://api.onlineszamla-test.nav.gov.hu/invoiceService/queryInvoiceStatus';
 
     private $user;
     private $password;
@@ -68,6 +72,14 @@ class NavInvoice
         $this->requestId = (empty($customId) ? $this->requestIdPrefix . time(). $this->requestCounter : $customId);
         $this->requestCounter++;
     }
+    
+    public function setTestMode()
+    {
+        $this->tokenUrl = $this->tokenUrlTest;
+        $this->invoiceUrl = $this->invoiceUrlTest;
+        $this->invoiceQueryUrl = $this->invoiceQueryUrlTest;
+        return $this;
+    }    
 
     public function setSignature($invoice = null)
     {
@@ -80,7 +92,7 @@ class NavInvoice
             'header' => [
                 'requestId' => $this->requestId,
                 'timestamp' => $this->timeStampFormatted,
-                'requestVersion' => '1.0',
+                'requestVersion' => '1.1',
                 'headerVersion' => '1.0'
             ],
             'user' => [
@@ -239,7 +251,8 @@ class NavInvoice
         $currency = 'HUF',
         $paymentMethod = 'TRANSFER',
         $invoiceCategory = 'NORMAL',
-        $invoiceAppearance = 'PAPER'
+        $invoiceAppearance = 'PAPER',
+        $exchangeRate = '1.00'
 
     )
     {
@@ -249,8 +262,9 @@ class NavInvoice
             'invoiceIssueDate' => $invoiceIssueDate,
             'invoiceDeliveryDate' => $invoiceDeliveryDate,
             'currencyCode' => $currency,
+            'exchangeRate' => $exchangeRate,
             'paymentMethod' => $paymentMethod,
-            'paymentDate' => $paymentDate,
+            'paymentDate' => $paymentDate,   
             'invoiceAppearance' => $invoiceAppearance,
         ];
     }
@@ -273,16 +287,21 @@ class NavInvoice
         $lineNumber = 1,
         $lineDescription = '',
         $quantity = 1,
-        $unitOfMeasure = 'db',
+        $unitOfMeasure = 'PIECE',
         $unitPrice = 0,
         $lineNetAmount = 0,
         $lineGrossAmountNormal = 0,
         $lineVatAmount = 0,
         $vatPercentage = '0.27',
         $productCodeCategory = 'SZJ',
-        $productCodeValue = '72601'
+        $productCodeValue = '72601',
+        $lineExpressionIndicator = 'true'
     )
     {
+        if($unitOfMeasure=='db')$unitOfMeasure = 'PIECE';
+        if($unitOfMeasure=='óra')$unitOfMeasure = 'HOUR';
+        if($unitOfMeasure=='nap')$unitOfMeasure = 'DAY';
+        
         $this->invoiceLines[] = [
             'line' => [
                 'lineNumber' => $lineNumber,
@@ -292,6 +311,7 @@ class NavInvoice
                         'productCodeValue' => $productCodeValue
                     ]
                 ],
+                'lineExpressionIndicator' => $lineExpressionIndicator,                
                 'lineDescription' => $lineDescription,
                 'quantity' => $quantity,
                 'unitOfMeasure' => $unitOfMeasure,
@@ -407,7 +427,9 @@ class NavInvoice
 
                 ]
             ];
-
+        //Remove comment for testing    
+        //header('Content-Type: text/xml; charset=utf-8');echo  $this->generateInvoiceXml();  die();
+        
         $xml = new SimpleXMLElement('<ManageInvoiceRequest/>');
         $xml->addAttribute('xmlns', 'http://schemas.nav.gov.hu/OSA/1.0/api');
         $this->arrayToXml($invoiceData, $xml);
