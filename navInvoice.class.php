@@ -1,11 +1,14 @@
 <?php
 
-
 class NavInvoice
 {
-    private $tokenUrl = 'https://api-test.onlineszamla.nav.gov.hu/invoiceService/tokenExchange';
-    private $invoiceUrl = 'https://api-test.onlineszamla.nav.gov.hu/invoiceService/manageInvoice';
-    private $invoiceQueryUrl = 'https://api-test.onlineszamla.nav.gov.hu/invoiceService/queryInvoiceStatus';
+    private $tokenUrl = 'https://api.onlineszamla.nav.gov.hu/invoiceService/v2/tokenExchange';
+    private $invoiceUrl = 'https://api.onlineszamla.nav.gov.hu/invoiceService/v2/manageInvoice';
+    private $invoiceQueryUrl = 'https://api.onlineszamla.nav.gov.hu/invoiceService/v2/queryTransactionStatus';
+    
+    private $tokenUrlTest = 'https://api-test.onlineszamla.nav.gov.hu/invoiceService/v2/tokenExchange';
+    private $invoiceUrlTest = 'https://api-test.onlineszamla.nav.gov.hu/invoiceService/v2/manageInvoice';
+    private $invoiceQueryUrlTest = 'https://api-test.onlineszamla.nav.gov.hu/invoiceService/v2/queryTransactionStatus';
 
     private $user;
     private $password;
@@ -42,6 +45,8 @@ class NavInvoice
     private $invoiceData = [];
     private $invoiceLines = [];
     private $invoiceSummary = [];
+    private $invoiceNumber = '';
+    private $invoiceIssueDate = '';
 
     private $requestCounter = 0;
 
@@ -57,9 +62,11 @@ class NavInvoice
         $this->writeLog('NAV script started');
         $this->invoiceSummary = [
             'invoiceNetAmount' => 0,
+            'invoiceNetAmountHUF' => 0,
             'invoiceVatAmount' => 0,
             'invoiceVatAmountHUF' => 0,
             'invoiceGrossAmount' => 0,
+            'invoiceGrossAmountHUF' => 0,
         ];
     }
 
@@ -68,10 +75,29 @@ class NavInvoice
         $this->requestId = (empty($customId) ? $this->requestIdPrefix . time(). $this->requestCounter : $customId);
         $this->requestCounter++;
     }
+    
+    public function setTestMode()
+    {
+        $this->tokenUrl = $this->tokenUrlTest;
+        $this->invoiceUrl = $this->invoiceUrlTest;
+        $this->invoiceQueryUrl = $this->invoiceQueryUrlTest;
+        return $this;
+    }    
 
     public function setSignature($invoice = null)
     {
-        $this->signature = strtoupper(hash('sha512', $this->requestId . $this->timeStamp->format('YmdHis') . $this->xmlKey . (!empty($invoice) ? $invoice : null)));
+        $this->signature = strtoupper($this->sha3($this->requestId . $this->timeStamp->format('YmdHis') . $this->xmlKey . (!empty($invoice) ? $invoice : null)));
+    }
+    
+    /*
+    * Standalone SHA3 generator for older PHP
+    * You can use hash('sha3-512', $string) on  >PHP7.1
+    */
+    public function sha3($string){
+        $sponge = SHA3::init (SHA3::SHA3_512);
+        $sponge->absorb ($string);
+        $hash = $sponge->squeeze ();  
+        return bin2hex($hash);   
     }
 
     public function generateXmlHeader()
@@ -80,7 +106,7 @@ class NavInvoice
             'header' => [
                 'requestId' => $this->requestId,
                 'timestamp' => $this->timeStampFormatted,
-                'requestVersion' => '1.0',
+                'requestVersion' => '2.0',
                 'headerVersion' => '1.0'
             ],
             'user' => [
@@ -105,14 +131,15 @@ class NavInvoice
     public function getNewToken()
     {
         $xml = new SimpleXMLElement('<TokenExchangeRequest/>');
-        $xml->addAttribute('xmlns', 'http://schemas.nav.gov.hu/OSA/1.0/api');
+        $xml->addAttribute('xmlns', 'http://schemas.nav.gov.hu/OSA/2.0/api');
         $this->arrayToXml($this->generateXmlHeader(), $xml);
         $xmlString = $xml->asXML();
+
         $return = $this->callUrl($this->tokenUrl, $xmlString);
         $returnXml = simplexml_load_string($return);
         if (empty($returnXml->encodedExchangeToken)) {
-            $this->writeLog('Token request failed');
-            throw new Exception('Error! Token Missing;');
+            $this->writeLog('Token request failed'.json_encode($return));
+            throw new Exception('Error! Token Missing;'.$return);
         }
 
         $aes = new AES((string)$returnXml->encodedExchangeToken, $this->xmlChangeKey, 128);
@@ -198,12 +225,17 @@ class NavInvoice
         $countyCode = 'HU'
     )
     {
-        $this->invoiceCustomer = [
+        $this->invoiceCustomer = [];
+        if($taxNumber !=''){
+          $this->invoiceCustomer = array_merge($this->invoiceCustomer, [
             'customerTaxNumber' => [
                 'taxpayerId' => substr($taxNumber, 0, 8),
                 'vatCode' => substr($taxNumber, 9, 1),
                 'countyCode' => substr($taxNumber, 11, 2),
-            ],
+            ]
+           ]);   
+        }
+        $this->invoiceCustomer = array_merge($this->invoiceCustomer, [
             'customerName' => $companyName,
             'customerAddress' => [
                 'detailedAddress' => [
@@ -217,8 +249,10 @@ class NavInvoice
                     'door' => $door,
                 ]
             ],
-            'supplierBankAccountNumber' => $account
-        ];
+            'customerBankAccountNumber'  => $account
+        ]);
+
+       
     }
 
     /**
@@ -239,18 +273,20 @@ class NavInvoice
         $currency = 'HUF',
         $paymentMethod = 'TRANSFER',
         $invoiceCategory = 'NORMAL',
-        $invoiceAppearance = 'PAPER'
+        $invoiceAppearance = 'PAPER',
+        $exchangeRate = '1.00'
 
     )
     {
+        $this->invoiceNumber =  $invoiceNumber;
+        $this->invoiceIssueDate =  $invoiceIssueDate;
         $this->invoiceData = [
-            'invoiceNumber' => $invoiceNumber,
             'invoiceCategory' => $invoiceCategory,
-            'invoiceIssueDate' => $invoiceIssueDate,
             'invoiceDeliveryDate' => $invoiceDeliveryDate,
             'currencyCode' => $currency,
+            'exchangeRate' => $exchangeRate,
             'paymentMethod' => $paymentMethod,
-            'paymentDate' => $paymentDate,
+            'paymentDate' => $paymentDate,   
             'invoiceAppearance' => $invoiceAppearance,
         ];
     }
@@ -273,16 +309,25 @@ class NavInvoice
         $lineNumber = 1,
         $lineDescription = '',
         $quantity = 1,
-        $unitOfMeasure = 'db',
+        $unitOfMeasure = 'PIECE',
         $unitPrice = 0,
-        $lineNetAmount = 0,
+        $lineNetAmount = 0,  
+        $lineNetAmountHUF = 0,
         $lineGrossAmountNormal = 0,
+        $lineGrossAmountNormalHUF = 0,
         $lineVatAmount = 0,
         $vatPercentage = '0.27',
         $productCodeCategory = 'SZJ',
-        $productCodeValue = '72601'
+        $productCodeValue = '72601',
+        $lineExpressionIndicator = 'true'
+        
     )
     {
+        if($unitOfMeasure=='db')$unitOfMeasure = 'PIECE';
+        if($unitOfMeasure=='óra')$unitOfMeasure = 'HOUR';
+        if($unitOfMeasure=='nap')$unitOfMeasure = 'DAY';
+        if($unitOfMeasure=='hó')$unitOfMeasure = 'MONTH';
+        
         $this->invoiceLines[] = [
             'line' => [
                 'lineNumber' => $lineNumber,
@@ -292,38 +337,46 @@ class NavInvoice
                         'productCodeValue' => $productCodeValue
                     ]
                 ],
+                'lineExpressionIndicator' => $lineExpressionIndicator,                
                 'lineDescription' => $lineDescription,
                 'quantity' => $quantity,
                 'unitOfMeasure' => $unitOfMeasure,
                 'unitPrice' => $unitPrice,
                 'lineAmountsNormal' => [
-                    'lineNetAmount' => $lineNetAmount,
+                    'lineNetAmountData' => [
+                        'lineNetAmount' => $lineNetAmount,
+                        'lineNetAmountHUF' => $lineNetAmountHUF
+                    ],
                     'lineVatRate' => [
                         'vatPercentage' => (float)$vatPercentage
-                    ],
-                    'lineVatAmount' => $lineVatAmount,
-                    'lineGrossAmountNormal' => $lineGrossAmountNormal
+                    ]
                 ],
             ]
         ];
 
-        if(empty($this->invoiceSummary[$vatPercentage])){
-            $this->invoiceSummary[$vatPercentage] = [
+        if(empty($this->invoiceSummary[(string)$vatPercentage])){
+            $this->invoiceSummary[(string)$vatPercentage] = [
                 'vatRateNetAmount' => $lineNetAmount,
+                'vatRateNetAmountHUF' => $lineNetAmountHUF,
                 'vatRateVatAmount' => $lineVatAmount,
                 'vatRateVatAmountHUF' => $lineVatAmount,
                 'vatRateGrossAmount' => $lineGrossAmountNormal,
+                'vatRateGrossAmountHUF' => $lineGrossAmountNormalHUF,
             ];
         }else{
-            $this->invoiceSummary[$vatPercentage]['vatRateNetAmount'] +=  $lineNetAmount;
-            $this->invoiceSummary[$vatPercentage]['vatRateVatAmount'] +=  $lineVatAmount;
-            $this->invoiceSummary[$vatPercentage]['vatRateVatAmountHUF'] +=  $lineVatAmount;
-            $this->invoiceSummary[$vatPercentage]['vatRateGrossAmount'] +=  $lineGrossAmountNormal;
+            $this->invoiceSummary[(string)$vatPercentage]['vatRateNetAmount'] +=  $lineNetAmount;
+            $this->invoiceSummary[(string)$vatPercentage]['vatRateNetAmountHUF'] +=  $lineNetAmountHUF;
+            $this->invoiceSummary[(string)$vatPercentage]['vatRateVatAmount'] +=  $lineVatAmount;
+            $this->invoiceSummary[(string)$vatPercentage]['vatRateVatAmountHUF'] +=  $lineVatAmount;
+            $this->invoiceSummary[(string)$vatPercentage]['vatRateGrossAmount'] +=  $lineGrossAmountNormal;
+            $this->invoiceSummary[(string)$vatPercentage]['vatRateGrossAmountHUF'] +=  $lineGrossAmountNormalHUF;
         }
         $this->invoiceSummary['invoiceNetAmount'] +=  $lineNetAmount;
+        $this->invoiceSummary['invoiceNetAmountHUF'] +=  $lineNetAmountHUF;
         $this->invoiceSummary['invoiceVatAmount'] +=  $lineVatAmount;
         $this->invoiceSummary['invoiceVatAmountHUF'] +=  $lineVatAmount;
         $this->invoiceSummary['invoiceGrossAmount'] +=  $lineGrossAmountNormal;
+        $this->invoiceSummary['invoiceGrossAmountHUF'] +=  $lineGrossAmountNormalHUF;
 
     }
 
@@ -337,11 +390,15 @@ class NavInvoice
                     'vatRate' => [
                         'vatPercentage' => (float)$vat
                     ],
-                    'vatRateNetAmount' => $this->invoiceSummary[$vat]['vatRateNetAmount'] ,
-                    'vatRateVatAmount' => $this->invoiceSummary[$vat]['vatRateVatAmount'],
-                    'vatRateVatAmountHUF' => $this->invoiceSummary[$vat]['vatRateVatAmountHUF'],
-                    'vatRateGrossAmount' => $this->invoiceSummary[$vat]['vatRateGrossAmount']
-
+                    'vatRateNetData' =>[
+                        'vatRateNetAmount' => $this->invoiceSummary[$vat]['vatRateNetAmount'] ,
+                        'vatRateNetAmountHUF' => $this->invoiceSummary[$vat]['vatRateNetAmountHUF'] ,
+  
+                    ]  ,
+                    'vatRateVatData' =>[
+                      'vatRateVatAmount' => $this->invoiceSummary[$vat]['vatRateVatAmount'],
+                      'vatRateVatAmountHUF' => $this->invoiceSummary[$vat]['vatRateVatAmountHUF'],                    
+                    ]
                 ];
             }
         }
@@ -350,10 +407,14 @@ class NavInvoice
             'summaryNormal' => [
                 $summaryByVatRate,
                 'invoiceNetAmount' => $this->invoiceSummary['invoiceNetAmount'],
+                'invoiceNetAmountHUF' => $this->invoiceSummary['invoiceNetAmountHUF'],
                 'invoiceVatAmount' => $this->invoiceSummary['invoiceVatAmount'],
                 'invoiceVatAmountHUF' => $this->invoiceSummary['invoiceVatAmountHUF'],
             ],
-            'invoiceGrossAmount' => $this->invoiceSummary['invoiceGrossAmount']
+            'summaryGrossData' => [
+                'invoiceGrossAmount' => $this->invoiceSummary['invoiceGrossAmount'],
+                'invoiceGrossAmountHUF' => $this->invoiceSummary['invoiceGrossAmountHUF']
+            ]
         ];
     }
 
@@ -362,24 +423,30 @@ class NavInvoice
         return [
             'supplierInfo' => $this->invoiceSupplier,
             'customerInfo' => $this->invoiceCustomer,
-            'invoiceData' => $this->invoiceData
+            'invoiceDetail' => $this->invoiceData
         ];
     }
 
     public function generateInvoiceXml()
     {
-        $xml = new SimpleXMLElement('<Invoice xmlns:xs= "http://www.w3.org/2001/XMLSchema-instance" xs:schemaLocation = "http://schemas.nav.gov.hu/OSA/1.0/data invoiceData.xsd"/>');
-        $xml->addAttribute('xmlns', 'http://schemas.nav.gov.hu/OSA/1.0/data');
+        $xml = new SimpleXMLElement('<InvoiceData xmlns:xs= "http://www.w3.org/2001/XMLSchema-instance" xs:schemaLocation = "http://schemas.nav.gov.hu/OSA/2.0/data invoiceData.xsd"/>');
+        $xml->addAttribute('xmlns', 'http://schemas.nav.gov.hu/OSA/2.0/data');
 
         $this->arrayToXml([
-            'invoiceExchange' => [
-                'invoiceHead' => $this->generateInvoiceHead(),
-                'invoiceLines' => $this->invoiceLines,
-                'invoiceSummary' => $this->getInvoiceSummary()
-            ]
+            'invoiceNumber' =>  $this->invoiceNumber,
+            'invoiceIssueDate' =>  $this->invoiceIssueDate,
+            'invoiceMain' => [
+                'invoice' => [
+                    'invoiceHead' => $this->generateInvoiceHead(),
+                    'invoiceLines' => $this->invoiceLines,
+                    'invoiceSummary' => $this->getInvoiceSummary()
+                ]
+            ]      
         ], $xml);
 
         $xmlString = $xml->asXML();
+        //var_dump($xmlString);
+       // die();
         return html_entity_decode($xmlString, ENT_NOQUOTES, 'UTF-8');
 
 
@@ -392,26 +459,28 @@ class NavInvoice
      * @throws Exception
      */
     public function sendInvoice($action =  'CREATE', $technicalAnnulment = 'false')
-    {
-        $this->setSignature(crc32(base64_encode($this->generateInvoiceXml())));
+    {          
+        $this->setSignature(strtoupper($this->sha3($action.base64_encode($this->generateInvoiceXml()))));
         $invoiceData = $this->generateXmlHeader()+[
                 'exchangeToken' => $this->token,
                 'invoiceOperations' => [
-                    'technicalAnnulment' => $technicalAnnulment,
                     'compressedContent' => 'false',
                     'invoiceOperation' => [
                         'index' => 1,
-                        'operation' => $action,
-                        'invoice' => base64_encode($this->generateInvoiceXml())
+                        'invoiceOperation' => $action,
+                        'invoiceData' => base64_encode($this->generateInvoiceXml())
                     ]
 
                 ]
             ];
+        //Remove comment for testing    
+        //header('Content-Type: text/xml; charset=utf-8');echo  $this->generateInvoiceXml();  die();
 
         $xml = new SimpleXMLElement('<ManageInvoiceRequest/>');
-        $xml->addAttribute('xmlns', 'http://schemas.nav.gov.hu/OSA/1.0/api');
+        $xml->addAttribute('xmlns', 'http://schemas.nav.gov.hu/OSA/2.0/api');
         $this->arrayToXml($invoiceData, $xml);
         $xmlString = $xml->asXML();
+
         $return = $this->callUrl($this->invoiceUrl, $xmlString);
         $returnXml = simplexml_load_string($return);
         if ($returnXml->result->funcCode == 'ERROR') {
@@ -438,12 +507,13 @@ class NavInvoice
                 'returnOriginalRequest' => 'false'
             ];
 
-        $xml = new SimpleXMLElement('<QueryInvoiceStatusRequest/>');
-        $xml->addAttribute('xmlns', 'http://schemas.nav.gov.hu/OSA/1.0/api');
+        $xml = new SimpleXMLElement('<QueryTransactionStatusRequest/>');
+        $xml->addAttribute('xmlns', 'http://schemas.nav.gov.hu/OSA/2.0/api');
         $this->arrayToXml($requesData, $xml);
         $xmlString = $xml->asXML();
-
+                                           var_dump($this->invoiceQueryUrl);
         $return = $this->callUrl($this->invoiceQueryUrl, $xmlString);
+
         $returnXml = simplexml_load_string($return);
         if ($returnXml->result->funcCode == 'ERROR') {
             $this->writeLog('Invoice query failed!');
@@ -476,7 +546,7 @@ class NavInvoice
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $xml);
         $result = $this->lastResult = curl_exec($ch);
-        curl_close($ch);
+        curl_close($ch); 
         return $result;
 
     }
