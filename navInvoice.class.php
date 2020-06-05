@@ -2,6 +2,7 @@
 
 class NavInvoice
 {
+
     private $tokenUrl = 'https://api.onlineszamla.nav.gov.hu/invoiceService/v2/tokenExchange';
     private $invoiceUrl = 'https://api.onlineszamla.nav.gov.hu/invoiceService/v2/manageInvoice';
     private $invoiceQueryUrl = 'https://api.onlineszamla.nav.gov.hu/invoiceService/v2/queryTransactionStatus';
@@ -320,13 +321,13 @@ class NavInvoice
         $productCodeCategory = 'SZJ',
         $productCodeValue = '72601',
         $lineExpressionIndicator = 'true'
-        
     )
     {
         if($unitOfMeasure=='db')$unitOfMeasure = 'PIECE';
         if($unitOfMeasure=='óra')$unitOfMeasure = 'HOUR';
         if($unitOfMeasure=='nap')$unitOfMeasure = 'DAY';
         if($unitOfMeasure=='hó')$unitOfMeasure = 'MONTH';
+
         
         $this->invoiceLines[] = [
             'line' => [
