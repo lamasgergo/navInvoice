@@ -350,6 +350,14 @@ class NavInvoice
                     ],
                     'lineVatRate' => [
                         'vatPercentage' => (float)$vatPercentage
+                    ],
+                    'lineVatData' => [
+                        'lineVatAmount' => (float)$lineVatAmount,
+                        'lineVatAmountHUF' => (float)($lineGrossAmountNormalHUF-$lineNetAmountHUF)
+                    ],
+                    'lineGrossAmountData' => [
+                        'lineGrossAmountNormal' => $lineGrossAmountNormal,
+                        'lineGrossAmountNormalHUF' => $lineGrossAmountNormalHUF
                     ]
                 ],
             ]
